@@ -4,6 +4,8 @@ let msgEmitter = null;
 let isRestarting = false;
 let reconnectAttempts = 0;
 let heartbeatInterval = null;
+let authRequired = false;
+const APPSTATE_PATH = path.join(__dirname, 'appstate.json');
 
 process.on('uncaughtException', (err) => {
   console.error('[الأسطورة جان] 🔴 خطأ غير متوقع:', err && err.message ? err.message : String(err));
@@ -24,10 +26,13 @@ process.on('SIGHUP', () => {
   console.log('[الأسطورة جان] ⚠️ استلمت SIGHUP — البوت يتجاهلها ويكمل');
 });
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
+const { loadAppState, saveAppState, hasSessionCookies } = require('./appstate-store');
+const { createTypingController, createTypingSettings } = require('./human-typing');
 const { login } = require('ws3-fca');
 const { loadCommands, handleMessage, handleEvent, commands } = require('./main');
 
@@ -41,6 +46,7 @@ app.get('/', (req, res) => {
     loggedIn: !!botApi,
     uptime: Math.floor(process.uptime()) + ' ثانية',
     reconnectAttempts,
+    authRequired,
     timestamp: new Date().toISOString()
   });
 });
@@ -58,13 +64,26 @@ app.get('/testsend', async (req, res) => {
   }
 });
 
+function isAuthorizedCookieUpdate(req) {
+  const expected = process.env.UPDATE_COOKIES_TOKEN;
+  const provided = req.get('x-update-token') || '';
+  if (!expected || provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+
 app.post('/updatecookies', express.json(), (req, res) => {
-  const appstatePath = path.join(__dirname, 'appstate.json');
+  if (!process.env.UPDATE_COOKIES_TOKEN) {
+    return res.status(503).json({ error: 'UPDATE_COOKIES_TOKEN is not configured.' });
+  }
+  if (!isAuthorizedCookieUpdate(req)) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
   try {
     const cookies = req.body;
-    if (!Array.isArray(cookies) || cookies.length === 0)
+    if (!hasSessionCookies(cookies))
       return res.status(400).json({ error: 'Invalid cookies format.' });
-    fs.writeFileSync(appstatePath, JSON.stringify(cookies, null, 2));
+    saveAppState(APPSTATE_PATH, cookies);
+    authRequired = false;
     console.log('[الأسطورة جان] ✅ تم تحديث الكوكيز عبر HTTP');
     res.json({ success: true, message: 'Cookies updated. Reconnecting...' });
     scheduleRestart(3000);
@@ -115,11 +134,10 @@ function startMemorySweeper(api) {
 function startAppstateSaver(api) {
   setInterval(() => {
     try {
-      const state = api.getAppState();
-      if (state && state.length > 0) {
-        fs.writeFileSync(path.join(__dirname, 'appstate.json'), JSON.stringify(state, null, 2));
-      }
-    } catch (e) {}
+      saveAppState(APPSTATE_PATH, api.getAppState());
+    } catch (e) {
+      console.error('[الأسطورة جان] ⚠️ تعذر حفظ appstate:', e.message);
+    }
   }, 30 * 60 * 1000);
 }
 
@@ -127,21 +145,19 @@ function startAppstateSaver(api) {
 function startBot() {
   if (isRestarting) return;
 
-  const appstatePath = path.join(__dirname, 'appstate.json');
+  const { state: appstate, problem } = loadAppState(APPSTATE_PATH);
 
   // لو الملف مش موجود → ننتظر ونحاول مجدداً
-  if (!fs.existsSync(appstatePath)) {
+  if (problem === 'missing') {
     console.error('[الأسطورة جان] ❌ appstate.json غير موجود — إعادة المحاولة بعد 30 ثانية');
     setTimeout(startBot, 30000);
     return;
   }
 
-  let appstate;
-  try {
-    appstate = JSON.parse(fs.readFileSync(appstatePath, 'utf8'));
-  } catch (e) {
-    console.error('[الأسطورة جان] ❌ خطأ في قراءة appstate.json:', e.message, '— إعادة بعد 30 ثانية');
-    setTimeout(startBot, 30000);
+  // ملف تالف أو ناقص الكوكيز: إعادة المحاولة لن تفيد، نطلب تسجيل دخول يدوي
+  if (problem) {
+    authRequired = true;
+    console.error(`[الأسطورة جان] 🔴 جلسة فيسبوك غير صالحة (${problem}) — مطلوب تسجيل دخول يدوي وإرسال كوكيز جديدة إلى /updatecookies`);
     return;
   }
 
@@ -189,8 +205,7 @@ function startBot() {
       // حفظ فوري للـ appstate
       try {
         const state = api.getAppState();
-        if (state && state.length > 0)
-          fs.writeFileSync(appstatePath, JSON.stringify(state, null, 2));
+        saveAppState(APPSTATE_PATH, state);
         console.log('[الأسطورة جان] 💾 تم تحديث appstate.json');
       } catch (e) {}
 

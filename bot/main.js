@@ -2,6 +2,13 @@ const fs = require("fs");
 const path = require("path");
 const { createRemoteControl } = require("./remote-control");
 const { deleteBotMessageOnAdminReaction } = require("./message-reactions");
+const { createTypingController, createTypingSettings } = require("./human-typing");
+
+const typing = createTypingController({
+  settings: createTypingSettings({
+    statePath: path.join(__dirname, "data", "typing-state.json"),
+  }),
+});
 
 const ADMINS = new Set(["100078389536244"]);
 const commands = new Map();
@@ -36,8 +43,10 @@ function loadCommands() {
   console.log(`[الأسطورة جان] تم تحميل ${commands.size} أمر.`);
 }
 
-async function handleMessage(api, event) {
+async function handleMessage(rawApi, event) {
   if (!event) return;
+  // قصف وتثبيت وماهوراغا تستخدم rawApi: رسائلها مؤقتة أو مجدولة بالثانية، ولا تنتظر مؤشر الكتابة
+  const api = typing.wrap(rawApi);
 
   const body = (event.body || "").trim();
   const threadID = String(event.threadID);
@@ -80,6 +89,20 @@ async function handleMessage(api, event) {
     if (handled) return;
   }
 
+  const typingMatch = body.match(/^كتابة\s+(تشغيل|ايقاف|إيقاف)$/u);
+  if (typingMatch) {
+    if (!isAdmin(senderID)) return;
+    const enabled = typingMatch[1] === "تشغيل";
+    typing.settings.setEnabled(enabled);
+    await rawApi
+      .sendMessage(
+        enabled ? "✅ تم تشغيل مؤشر الكتابة البشرية." : "⛔ تم إيقاف مؤشر الكتابة البشرية.",
+        threadID,
+      )
+      .catch(() => {});
+    return;
+  }
+
   if (body === "اوامر" || body === "أوامر") {
     if (!isAdmin(senderID)) return;
     remoteControl
@@ -115,7 +138,7 @@ async function handleMessage(api, event) {
     mahoragaCmd.handleIncomingMessage &&
     (!isMahoragaControl || !isAdmin(senderID))
   ) {
-    mahoragaCmd.handleIncomingMessage(api, event);
+    mahoragaCmd.handleIncomingMessage(rawApi, event);
   }
 
   // عداد 568 — يتفاعل على الرسالة رقم 568 وكل مضاعفاتها
@@ -165,7 +188,7 @@ async function handleMessage(api, event) {
     const cmd = commands.get("قصف");
     if (cmd)
       cmd
-        .execute(api, event)
+        .execute(rawApi, event)
         .catch((e) => console.error("[الأسطورة جان] خطأ في قصف:", e.message));
     return;
   }
@@ -195,7 +218,7 @@ async function handleMessage(api, event) {
     const cmd = commands.get("ماهوراغا");
     if (cmd)
       cmd
-        .execute(api, event)
+        .execute(rawApi, event)
         .catch((e) =>
           console.error("[الأسطورة جان] خطأ في ماهوراغا:", e.message || e),
         );
@@ -253,7 +276,7 @@ async function handleMessage(api, event) {
     const cmd = commands.get("تثبيت");
     if (cmd)
       cmd
-        .execute(api, event)
+        .execute(rawApi, event)
         .catch((e) =>
           console.error("[الأسطورة جان] خطأ في تثبيت:", e.message || e),
         );
