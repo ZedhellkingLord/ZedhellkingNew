@@ -26,6 +26,7 @@ process.on('SIGHUP', () => {
 
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const { login } = require('ws3-fca');
 const { loadCommands, handleMessage, handleEvent, commands } = require('./main');

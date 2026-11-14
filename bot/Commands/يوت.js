@@ -1,21 +1,24 @@
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// استخدام أدوات النظام المثبتة في بيئة التشغيل.
-const YTDL_PATH = 'yt-dlp';
+const YTDL_PATH = process.env.YTDLP_BIN || 'yt-dlp';
 const DENO_PATH = process.env.DENO_BIN || 'deno';
 const YOUTUBE_STATE_PATH = path.join(__dirname, '..', 'data', 'youtube-state.json');
 
 function downloadAudio(query, outFile) {
   return new Promise((resolve, reject) => {
-    const safeQuery = query.replace(/"/g, '\\"').replace(/`/g, '');
+    const args = [
+      '--js-runtimes', `deno:${DENO_PATH}`,
+      '--remote-components', 'ejs:github',
+      '--extractor-args', 'youtube:player_client=web_embedded',
+      `ytsearch1:${query}`,
+      '-x', '--audio-format', 'mp3', '--audio-quality', '0',
+      '--no-playlist', '-o', outFile,
+    ];
+    console.log(`[يوت] تنفيذ: ${YTDL_PATH} ${args.join(' ')}`);
 
-    // استخدام Deno كـ JavaScript runtime لمساعدة yt-dlp مع YouTube
-    const cmd = `"${YTDL_PATH}" --js-runtimes "deno:${DENO_PATH}" --remote-components ejs:github --extractor-args "youtube:player_client=web_embedded" "ytsearch1:${safeQuery}" -x --audio-format mp3 --audio-quality 0 --no-playlist -o "${outFile}"`;
-    console.log(`[يوت] تنفيذ: ${cmd}`);
-
-    exec(cmd, { timeout: 150000 }, (err, stdout, stderr) => {
+    execFile(YTDL_PATH, args, { timeout: 150000 }, (err, stdout, stderr) => {
       if (fs.existsSync(outFile) && fs.statSync(outFile).size > 0) {
         resolve();
       } else if (err) {
