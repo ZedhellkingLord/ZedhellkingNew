@@ -1,3 +1,4 @@
+const path = require('path');
 // ─── صمّام الأمان العالمي: لا يموت البوت أبداً ───
 let botApi = null;
 let msgEmitter = null;
@@ -28,7 +29,6 @@ process.on('SIGHUP', () => {
 
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const { loadAppState, saveAppState, hasSessionCookies } = require('./appstate-store');
